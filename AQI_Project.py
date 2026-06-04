@@ -98,25 +98,39 @@ def build_clean_dataset():
         return
 
     df = pd.read_csv(RAW_FILE)
+
+    # Normalize column names (once, not three times)
     df.columns = df.columns.str.strip().str.lower()
-    df.columns = df.columns.str.strip().str.lower()
-    df.columns = df.columns.str.strip().str.lower()
-    df = df.sort_values("timestamp").drop_duplicates("timestamp")
+
+    # Guard: confirm timestamp column exists
+    if "timestamp" not in df.columns:
+        print("ERROR: 'timestamp' column not found. Columns present:", df.columns.tolist())
+        return
+
+    # FIX: parse timestamp string → datetime so .dt accessor and sort work
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    df = df.sort_values("timestamp").drop_duplicates("timestamp").reset_index(drop=True)
     df = df.dropna(subset=["aqi"])
+
+    # Need at least 4 rows to produce valid lag/diff features
+    if len(df) < 4:
+        print(f"Not enough data to build features yet ({len(df)} rows). Need at least 4.")
+        return
 
     # Time features
     df["hour"]        = df["timestamp"].dt.hour
     df["day_of_week"] = df["timestamp"].dt.dayofweek
     df["month"]       = df["timestamp"].dt.month
 
-    # Lag features
+    # Lag features (assumes ~1hr collection interval)
     df["aqi_lag_1h"] = df["aqi"].shift(1)
     df["aqi_lag_3h"] = df["aqi"].shift(3)
 
     # AQI change rate
     df["aqi_change"] = df["aqi"].diff()
 
-    df = df.dropna(subset=["aqi", "aqi_lag_1h", "aqi_lag_3h", "aqi_change"])
+    df = df.dropna(subset=["aqi_lag_1h", "aqi_lag_3h", "aqi_change"])
     df.to_csv(FINAL_FILE, index=False)
     print(f"\nClean dataset saved: {len(df)} rows")
     print(df.tail(3))
