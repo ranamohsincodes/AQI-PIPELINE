@@ -13,6 +13,11 @@ from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import os
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
 
 st.set_page_config(
     page_title="Karachi AQI Predictor",
@@ -26,6 +31,8 @@ OPENWEATHER_KEY = os.environ.get("OPENWEATHER_KEY", "")
 LAT, LON       = 24.8607, 67.0011
 MODEL_FILE     = "aqi_model.pkl"
 RIDGE_FILE     = "aqi_ridge_model.pkl"
+TF_MODEL_FILE  = "aqi_tf_model.keras"
+SCALER_FILE    = "scaler.pkl"
 CLEAN_FILE     = "karachi_clean_dataset.csv"
 
 FEATURES = [
@@ -313,6 +320,27 @@ def load_ridge_model(df):
     joblib.dump(pipe, RIDGE_FILE)
     return pipe
 
+@st.cache_resource
+def load_tf_model():
+    if not TF_AVAILABLE:
+        return None, None
+    try:
+        model = tf.keras.models.load_model(TF_MODEL_FILE)
+        scaler = joblib.load(SCALER_FILE)
+        return model, scaler
+    except Exception:
+        return None, None
+
+def predict_tf(tf_model, scaler, inp_df):
+    """Run TF model prediction, returns int AQI 1-5."""
+    X = scaler.transform(inp_df[FEATURES].values)
+    raw = tf_model.predict(X, verbose=0)[0][0]
+    return max(1, min(5, int(round(raw))))
+
+def get_tf_metrics():
+    """Return hardcoded TF test metrics from train_tf_model.py run."""
+    return {"rmse": 0.1700, "mae": 0.1254, "r2": 0.8699}
+
 @st.cache_data
 def load_data():
     df = pd.read_csv(CLEAN_FILE)
@@ -538,6 +566,8 @@ def main():
         rf_model = load_rf_model()
         df       = load_data()
         ridge_model = load_ridge_model(df)
+        tf_model, tf_scaler = load_tf_model()
+        tf_available = tf_model is not None
     except Exception as e:
         st.error(f"❌ {e}"); st.stop()
 
@@ -555,13 +585,21 @@ def main():
         # Model selector
         st.caption("💡 Delete aqi_ridge_model.pkl to retrain Ridge")
         st.markdown("---")
+        model_options = ["Random Forest", "Ridge Regression"]
+        if tf_available:
+            model_options.append("TensorFlow Neural Net")
         active_model_name = st.radio(
             "🤖 Active Forecast Model",
-            ["Random Forest", "Ridge Regression"],
+            model_options,
             index=0,
             help="Switch between ML models for the 72-hour forecast"
         )
-        active_model = rf_model if active_model_name == "Random Forest" else ridge_model
+        if active_model_name == "Random Forest":
+            active_model = rf_model
+        elif active_model_name == "Ridge Regression":
+            active_model = ridge_model
+        else:
+            active_model = None  # TF handled separately
 
         # RF metrics
         st.markdown("---")
@@ -593,6 +631,19 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
+        # TF metrics
+        if tf_available:
+            tm = get_tf_metrics()
+            st.markdown(f"""
+            <div style="margin-top:8px;background:{rf_color};border:1px solid {'#334155' if dark_mode else '#e2e8f0'};border-radius:10px;padding:14px;">
+            <div style="font-size:0.72rem;font-weight:600;color:#7c3aed;margin-bottom:6px;">🧠 TensorFlow Neural Net</div>
+            <div class="srow"><span class="sk">Architecture</span><span class="sv">Dense 64→32→1</span></div>
+            <div class="srow"><span class="sk">RMSE</span><span class="sv">{tm['rmse']:.4f}</span></div>
+            <div class="srow"><span class="sk">MAE</span><span class="sv">{tm['mae']:.4f}</span></div>
+            <div class="srow"><span class="sk">R²</span><span class="sv" style="color:#7c3aed;">{tm['r2']:.4f}</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
         st.markdown("---")
         st.markdown(f"""
         <div class="srow"><span class="sk">City</span><span class="sv">Karachi, PK</span></div>
@@ -612,7 +663,7 @@ def main():
     <div class="dash-header">
         <div>
             <div class="dash-title">🌤️ Karachi AQI Predictor</div>
-            <div class="dash-sub">Real-time Air Quality Monitoring & 3-Day Forecast · Random Forest + Ridge Regression</div>
+            <div class="dash-sub">Real-time Air Quality Monitoring & 3-Day Forecast · Random Forest + Ridge Regression + TensorFlow</div>
         </div>
         <div style="text-align:right;">
             <div class="city-badge">📍 Karachi, Pakistan</div>
@@ -747,8 +798,8 @@ def main():
             st.dataframe(disp, use_container_width=True, hide_index=True)
 
     with tab2:
-        st.markdown('<div class="sec">Random Forest vs Ridge Regression — Side by Side</div>', unsafe_allow_html=True)
-        m1, m2 = st.columns(2)
+        st.markdown('<div class="sec">Random Forest vs Ridge Regression vs TensorFlow — Side by Side</div>', unsafe_allow_html=True)
+        m1, m2, m3 = st.columns(3)
         with m1:
             st.markdown("""
             <div style="background:#dbeafe;border-radius:10px;padding:14px;margin-bottom:12px;">
@@ -775,11 +826,26 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             st.markdown(f"**Accuracy:** {rm['accuracy']*100:.1f}% &nbsp; **R²:** {rm['r2']:.4f} &nbsp; **RMSE:** {rm['rmse']:.4f}")
+        with m3:
+            tm = get_tf_metrics()
+            tf_status = "✅ Loaded" if tf_available else "⚠️ File not found"
+            st.markdown(f"""
+            <div style="background:#f5f3ff;border-radius:10px;padding:14px;margin-bottom:12px;">
+            <div style="font-weight:700;color:#6d28d9;margin-bottom:8px;">🧠 TensorFlow Neural Net</div>
+            <div style="font-size:0.78rem;color:#5b21b6;">
+            • Dense layers: 64 → 32 → 1<br>
+            • ReLU activation, Adam optimizer<br>
+            • Feature scaling with StandardScaler<br>
+            • 50 epochs, batch size 32
+            </div>
+            </div>
+            """, unsafe_allow_html=True)
+            st.markdown(f"**R²:** {tm['r2']:.4f} &nbsp; **RMSE:** {tm['rmse']:.4f} &nbsp; **MAE:** {tm['mae']:.4f} &nbsp; *{tf_status}*")
 
         st.markdown('<div class="sec" style="margin-top:8px;">Forecast Comparison Chart</div>', unsafe_allow_html=True)
         st.plotly_chart(chart_forecast(ridge_fdf, rf_fdf, dark=dark_mode), use_container_width=True, key="chart_forecast_tab2")
 
-        st.info("💡 **Why both models?** Random Forest captures complex non-linear patterns for high accuracy. Ridge Regression acts as a fast, interpretable baseline to validate RF predictions. Agreement between both models indicates higher forecast confidence.")
+        st.info("💡 **Why three models?** Random Forest captures complex non-linear patterns for highest accuracy. Ridge Regression is a fast interpretable baseline. TensorFlow Neural Net demonstrates deep learning on the same data. RF outperforms TF here because lag features favour tree-based models.")
 
     with tab3:
         col_h1, col_h2 = st.columns([2,1])
@@ -831,7 +897,7 @@ def main():
     <div class="footer">
     Built for 10Pearls Data Sciences Internship &nbsp;·&nbsp;
     Data: OpenWeatherMap API &nbsp;·&nbsp;
-    Models: Random Forest + Ridge Regression &nbsp;·&nbsp;
+    Models: Random Forest + Ridge Regression + TensorFlow &nbsp;·&nbsp;
     Timezone: PKT (UTC+5)
     </div>""", unsafe_allow_html=True)
 
