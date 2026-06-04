@@ -99,9 +99,10 @@ def build_clean_dataset():
 
     df = pd.read_csv(RAW_FILE)
     df.columns = df.columns.str.strip().str.lower()
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df.columns = df.columns.str.strip().str.lower()
+    df.columns = df.columns.str.strip().str.lower()
     df = df.sort_values("timestamp").drop_duplicates("timestamp")
-    df = df.dropna(subset=["aqi", "temperature", "humidity"])
+    df = df.dropna(subset=["aqi"])
 
     # Time features
     df["hour"]        = df["timestamp"].dt.hour
@@ -115,7 +116,7 @@ def build_clean_dataset():
     # AQI change rate
     df["aqi_change"] = df["aqi"].diff()
 
-    df = df.dropna()
+    df = df.dropna(subset=["aqi", "aqi_lag_1h", "aqi_lag_3h", "aqi_change"])
     df.to_csv(FINAL_FILE, index=False)
     print(f"\nClean dataset saved: {len(df)} rows")
     print(df.tail(3))
